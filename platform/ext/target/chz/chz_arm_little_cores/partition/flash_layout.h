@@ -74,8 +74,8 @@
 #define FLASH_TOTAL_SIZE                (0x00400000) /* 4 MB */
 
 /* Flash layout info for BL2 bootloader */
-/* CHZ SoC has no flash: DDR (0x8000_0000) is used as the backing store. */
-#define FLASH_BASE_ADDRESS              (0x80000000)
+/* CHZ SoC: SPI NOR flash behind AXI Quad SPI, memory-mapped (XIP) at 0x1000_0000. */
+#define FLASH_BASE_ADDRESS              (0x10000000)
 
 /* Offset and size definitions of the flash partitions that are handled by the
  * bootloader. The image swapping is done between IMAGE_PRIMARY and
@@ -218,11 +218,11 @@
 #define TFM_OTP_NV_COUNTERS_BACKUP_AREA_ADDR (TFM_OTP_NV_COUNTERS_AREA_ADDR + \
                                               TFM_OTP_NV_COUNTERS_AREA_SIZE)
 
-/* CHZ SoC: code is stored in DDR (0x8000_0000), data in DDR (0x8800_0000).
- * The 64KB ITCM (0x0000_0000) / DTCM (0x2000_0000) are reserved for the
- * boot stub that sets VTOR and jumps to the image in DDR. */
-#define S_ROM_ALIAS_BASE  (0x80000000)
-#define NS_ROM_ALIAS_BASE (0x80000000)
+/* CHZ SoC: code runs XIP from the SPI NOR flash (0x1000_0000), data in DDR
+ * (0x8800_0000). The 64KB ITCM (0x0000_0000) / DTCM (0x2000_0000) are reserved
+ * for the boot stub that sets VTOR and jumps to the image. */
+#define S_ROM_ALIAS_BASE  (0x10000000)
+#define NS_ROM_ALIAS_BASE (0x10000000)
 
 /* RW data lives in DDR */
 #define S_RAM_ALIAS_BASE  (0x88000000)
