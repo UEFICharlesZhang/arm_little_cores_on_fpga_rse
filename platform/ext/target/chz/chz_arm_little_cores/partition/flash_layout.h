@@ -60,8 +60,8 @@
  */
 
 /* Size of a Secure and of a Non-secure image */
-#define FLASH_S_PARTITION_SIZE          (0x80000) /* S partition: 512 KB */
-#define FLASH_NS_PARTITION_SIZE         (0x80000) /* NS partition: 512 KB */
+#define FLASH_S_PARTITION_SIZE          (0x10000) /* S partition: 64 KB */
+#define FLASH_NS_PARTITION_SIZE         (0x10000) /* NS partition: 64 KB */
 
 #if (FLASH_S_PARTITION_SIZE > FLASH_NS_PARTITION_SIZE)
 #define FLASH_MAX_PARTITION_SIZE FLASH_S_PARTITION_SIZE
@@ -83,7 +83,7 @@
  * swapping.
  */
 #define FLASH_AREA_BL2_OFFSET      (0x0)
-#define FLASH_AREA_BL2_SIZE        (0x80000) /* 512 KB */
+#define FLASH_AREA_BL2_SIZE        (0x10000) /* 64 KB */
 
 #if !defined(MCUBOOT_IMAGE_NUMBER) || (MCUBOOT_IMAGE_NUMBER == 1)
 /* Secure + Non-secure image primary slot */
@@ -218,25 +218,22 @@
 #define TFM_OTP_NV_COUNTERS_BACKUP_AREA_ADDR (TFM_OTP_NV_COUNTERS_AREA_ADDR + \
                                               TFM_OTP_NV_COUNTERS_AREA_SIZE)
 
-/* CHZ SoC (RAM load): images are stored in SPI NOR flash (0x1000_0000) and
- * copied by BL2 to DDR for execution. S/NS code runs from DDR (0x8000_0000),
- * RW data in DDR (0x8800_0000). The 64KB ITCM/DTCM are reserved for the boot
- * stub that copies BL2 from flash to DDR and jumps. */
-#define S_ROM_ALIAS_BASE  (0x80000000)
-#define NS_ROM_ALIAS_BASE (0x80000000)
+/* CHZ SoC: firmware runs only from TCM (no DDR for code/data; DDR is reserved
+ * for other uses). BL2 and tfm_s both run from ITCM (0x0000_0000) / DTCM
+ * (0x2000_0000), overwriting each other across boot stages. Images are stored
+ * in SPI NOR flash (0x1000_0000) and copied to TCM by the ROM code / BL2. */
+#define S_ROM_ALIAS_BASE  (0x00000000)
+#define NS_ROM_ALIAS_BASE (0x00000000)
 
-/* Image load addresses: where BL2 copies the images. Kept consistent with the
- * linker layout: S_CODE_START = S_ROM_ALIAS_BASE + FLASH_AREA_0_OFFSET +
- * BL2_HEADER_SIZE, hence S_IMAGE_LOAD_ADDRESS = S_ROM_ALIAS_BASE +
- * FLASH_AREA_0_OFFSET. */
-#define S_IMAGE_LOAD_ADDRESS  (0x80080000)
-#define NS_IMAGE_LOAD_ADDRESS (0x80100000)
+/* Image load addresses: where BL2 copies the images (ITCM). */
+#define S_IMAGE_LOAD_ADDRESS  (0x00000000)
+#define NS_IMAGE_LOAD_ADDRESS (0x00000000)
 
-/* RW data lives in DDR */
-#define S_RAM_ALIAS_BASE  (0x88000000)
-#define NS_RAM_ALIAS_BASE (0x89000000)
+/* RW data lives in DTCM */
+#define S_RAM_ALIAS_BASE  (0x20000000)
+#define NS_RAM_ALIAS_BASE (0x20000000)
 
 #define TOTAL_ROM_SIZE FLASH_TOTAL_SIZE
-#define TOTAL_RAM_SIZE (0x100000)     /* 1 MB */
+#define TOTAL_RAM_SIZE (0x10000)     /* 64 KB DTCM */
 
 #endif /* __FLASH_LAYOUT_H__ */

@@ -10,10 +10,10 @@
 include(hex_generator)
 
 if(BL2)
-    set(BL2_TRAILER_SIZE 0x10000 CACHE STRING "Trailer size")
+    set(BL2_TRAILER_SIZE 0x1000 CACHE STRING "Trailer size")
 else()
     #No header if no bootloader, but keep IMAGE_CODE_SIZE the same
-    set(BL2_TRAILER_SIZE 0x10400 CACHE STRING "Trailer size")
+    set(BL2_TRAILER_SIZE 0x1000 CACHE STRING "Trailer size")
 endif()
 
 # Platform-specific configurations
