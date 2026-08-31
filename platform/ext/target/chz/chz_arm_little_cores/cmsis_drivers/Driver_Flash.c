@@ -1,19 +1,13 @@
 /*
- * Copyright (c) 2013-2022 ARM Limited. All rights reserved.
+ * CHZ Arm Little Cores SoC - SPI NOR flash driver (AXI Quad SPI)
  *
- * SPDX-License-Identifier: Apache-2.0
+ * Replaces the an521 SRAM-emulated flash driver with a real driver for a SPI
+ * NOR flash behind a Xilinx AXI Quad SPI controller (PG153).
  *
- * Licensed under the Apache License, Version 2.0 (the License); you may
- * not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Read:  memory-mapped XIP window (FLASH0_BASE_S = 0x1000_0000).
+ * Erase/Program: AXI Quad SPI legacy register interface (SPI NOR commands).
  *
- * www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an AS IS BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include <string.h>
@@ -30,11 +24,145 @@
 #define ARM_FLASH_DRV_VERSION      ARM_DRIVER_VERSION_MAJOR_MINOR(1, 1)
 #define ARM_FLASH_DRV_ERASE_VALUE  0xFF
 
-/**
- * Data width values for ARM_FLASH_CAPABILITIES::data_width
- * \ref ARM_FLASH_CAPABILITIES
- */
- enum {
+/* ------------------------------------------------------------------ */
+/* AXI Quad SPI (Xilinx PG153) register map                           */
+/* ------------------------------------------------------------------ */
+#define AXI_QSPI_BASE          0x40060000UL
+
+#define AXI_QSPI_SRR           (AXI_QSPI_BASE + 0x40)  /* Software Reset       */
+#define AXI_QSPI_SPICR         (AXI_QSPI_BASE + 0x60)  /* SPI Control          */
+#define AXI_QSPI_SPISR         (AXI_QSPI_BASE + 0x64)  /* SPI Status           */
+#define AXI_QSPI_SPI_DTR       (AXI_QSPI_BASE + 0x68)  /* Data Transmit (FIFO) */
+#define AXI_QSPI_SPI_DRR       (AXI_QSPI_BASE + 0x6C)  /* Data Receive  (FIFO) */
+#define AXI_QSPI_SPISSR        (AXI_QSPI_BASE + 0x70)  /* Slave Select         */
+#define AXI_QSPI_TX_FIFO_OCY   (AXI_QSPI_BASE + 0x74)  /* TX FIFO Occupancy    */
+#define AXI_QSPI_RX_FIFO_OCY   (AXI_QSPI_BASE + 0x78)  /* RX FIFO Occupancy    */
+
+/* SPICR bit fields (PG153, [TODO: 核对] 具体位定义) */
+#define SPICR_SPE            (1u << 0)   /* SPI Enable                    */
+#define SPICR_MASTER         (1u << 1)   /* Master mode                   */
+#define SPICR_CPOL           (1u << 2)
+#define SPICR_CPHA           (1u << 3)
+#define SPICR_TX_FIFO_RST    (1u << 4)
+#define SPICR_RX_FIFO_RST    (1u << 5)
+#define SPICR_MTI            (1u << 6)   /* Master Transaction Inhibit   */
+
+/* SPISR bit fields (PG153, [TODO: 核对]) */
+#define SPISR_RX_EMPTY       (1u << 0)
+#define SPISR_RX_FULL        (1u << 1)
+#define SPISR_TX_EMPTY       (1u << 2)
+#define SPISR_TX_FULL        (1u << 3)
+
+/* SRR software reset value */
+#define SRR_SW_RESET         0x0AU
+
+/* ------------------------------------------------------------------ */
+/* SPI NOR flash commands (Winbond/ISSI/Micron compatible)            */
+/* ------------------------------------------------------------------ */
+#define CMD_WREN             0x06U
+#define CMD_WRDI             0x04U
+#define CMD_RDSR1            0x05U
+#define CMD_PAGE_PROGRAM     0x02U
+#define CMD_READ             0x03U
+#define CMD_SECTOR_ERASE     0x20U  /* 4 KB sector */
+#define CMD_CHIP_ERASE       0xC7U
+
+#define FLASH_WIP_MASK       0x01U  /* Write In Progress, RDSR1 bit 0 */
+
+/* ------------------------------------------------------------------ */
+/* Low-level AXI Quad SPI accessors                                    */
+/* ------------------------------------------------------------------ */
+static volatile uint32_t *qspi_reg(uint32_t addr)
+{
+    return (volatile uint32_t *)addr;
+}
+
+static void qspi_wr(uint32_t addr, uint32_t val)
+{
+    *qspi_reg(addr) = val;
+}
+
+static uint32_t qspi_rd(uint32_t addr)
+{
+    return *qspi_reg(addr);
+}
+
+static void qspi_tx_byte(uint8_t b)
+{
+    qspi_wr(AXI_QSPI_SPI_DTR, b);
+    while (!(qspi_rd(AXI_QSPI_SPISR) & SPISR_TX_EMPTY)) {
+    }
+}
+
+static uint8_t qspi_xfer_byte(uint8_t b)
+{
+    qspi_tx_byte(b);
+    while (qspi_rd(AXI_QSPI_SPISR) & SPISR_RX_EMPTY) {
+    }
+    return (uint8_t)qspi_rd(AXI_QSPI_SPI_DRR);
+}
+
+static void qspi_send(const uint8_t *buf, uint32_t len)
+{
+    while (len--) {
+        qspi_tx_byte(*buf++);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* SPI NOR flash operations                                            */
+/* ------------------------------------------------------------------ */
+static void flash_write_enable(void)
+{
+    uint8_t cmd = CMD_WREN;
+    qspi_send(&cmd, 1);
+}
+
+static uint8_t flash_read_status(void)
+{
+    qspi_xfer_byte(CMD_RDSR1);
+    return qspi_xfer_byte(0x00);
+}
+
+static void flash_wait_wip_clear(void)
+{
+    while (flash_read_status() & FLASH_WIP_MASK) {
+    }
+}
+
+static void flash_sector_erase(uint32_t addr)
+{
+    uint8_t cmd[4] = {
+        CMD_SECTOR_ERASE,
+        (uint8_t)(addr >> 16),
+        (uint8_t)(addr >> 8),
+        (uint8_t)(addr),
+    };
+
+    flash_write_enable();
+    qspi_send(cmd, sizeof(cmd));
+    flash_wait_wip_clear();
+}
+
+static void flash_page_program(uint32_t addr, const uint8_t *data, uint32_t len)
+{
+    uint8_t cmd[4] = {
+        CMD_PAGE_PROGRAM,
+        (uint8_t)(addr >> 16),
+        (uint8_t)(addr >> 8),
+        (uint8_t)(addr),
+    };
+
+    flash_write_enable();
+    qspi_send(cmd, sizeof(cmd));
+    qspi_send(data, len);
+    flash_wait_wip_clear();
+}
+
+/* ------------------------------------------------------------------ */
+/* CMSIS ARM_DRIVER_FLASH                                             */
+/* ------------------------------------------------------------------ */
+enum {
     DATA_WIDTH_8BIT   = 0u,
     DATA_WIDTH_16BIT,
     DATA_WIDTH_32BIT,
@@ -47,108 +175,73 @@ static const uint32_t data_width_byte[DATA_WIDTH_ENUM_SIZE] = {
     sizeof(uint32_t),
 };
 
-/*
- * ARM FLASH device structure
- *
- * There is no real flash memory for code on MPS2 board. Instead a code SRAM is
- * used for code storage: ZBT SSRAM1. This driver just emulates a flash
- * interface and behaviour on top of the SRAM memory.
- */
 struct arm_flash_dev_t {
-    const uint32_t memory_base;   /*!< FLASH memory base address */
-    ARM_FLASH_INFO *data;         /*!< FLASH data */
+    const uint32_t memory_base;
+    ARM_FLASH_INFO *data;
 };
 
-/* Flash Status */
-static ARM_FLASH_STATUS FlashStatus = {0, 0, 0};
+static ARM_FLASH_STATUS FlashStatus = { 0, 0, 0 };
 
-/* Driver Version */
 static const ARM_DRIVER_VERSION DriverVersion = {
     ARM_FLASH_API_VERSION,
     ARM_FLASH_DRV_VERSION
 };
 
-/* Driver Capabilities */
 static const ARM_FLASH_CAPABILITIES DriverCapabilities = {
     0, /* event_ready */
-    0, /* data_width = 0:8-bit, 1:16-bit, 2:32-bit */
+    0, /* data_width = 8-bit */
     1  /* erase_chip */
 };
 
-static int32_t is_range_valid(struct arm_flash_dev_t *flash_dev,
-                              uint32_t offset)
+static int32_t is_range_valid(struct arm_flash_dev_t *flash_dev, uint32_t offset)
 {
-    uint32_t flash_limit = 0;
-    int32_t rc = 0;
-
-    flash_limit = (flash_dev->data->sector_count * flash_dev->data->sector_size)
-                   - 1;
+    uint32_t flash_limit =
+        (flash_dev->data->sector_count * flash_dev->data->sector_size) - 1;
 
     if (offset > flash_limit) {
-        rc = -1;
+        return -1;
     }
-    return rc;
+    return 0;
 }
 
 static int32_t is_write_aligned(struct arm_flash_dev_t *flash_dev,
                                 uint32_t param)
 {
-    int32_t rc = 0;
-
     if ((param % flash_dev->data->program_unit) != 0) {
-        rc = -1;
+        return -1;
     }
-    return rc;
+    return 0;
 }
 
 static int32_t is_sector_aligned(struct arm_flash_dev_t *flash_dev,
                                  uint32_t offset)
 {
-    int32_t rc = 0;
-
     if ((offset % flash_dev->data->sector_size) != 0) {
-        rc = -1;
+        return -1;
     }
-    return rc;
-}
-
-static int32_t is_flash_ready_to_write(const uint8_t *start_addr, uint32_t cnt)
-{
-    int32_t rc = 0;
-    uint32_t i;
-
-    for (i = 0; i < cnt; i++) {
-        if(start_addr[i] != ARM_FLASH_DRV_ERASE_VALUE) {
-            rc = -1;
-            break;
-        }
-    }
-
-    return rc;
+    return 0;
 }
 
 #if (RTE_FLASH0)
 static ARM_FLASH_INFO ARM_FLASH0_DEV_DATA = {
-    .sector_info  = NULL,                  /* Uniform sector layout */
+    .sector_info  = NULL,
     .sector_count = FLASH0_SIZE / FLASH0_SECTOR_SIZE,
     .sector_size  = FLASH0_SECTOR_SIZE,
     .page_size    = FLASH0_PAGE_SIZE,
     .program_unit = FLASH0_PROGRAM_UNIT,
-    .erased_value = ARM_FLASH_DRV_ERASE_VALUE};
+    .erased_value = ARM_FLASH_DRV_ERASE_VALUE,
+};
 
 static struct arm_flash_dev_t ARM_FLASH0_DEV = {
 #if (__DOMAIN_NS == 1)
     .memory_base = FLASH0_BASE_NS,
 #else
     .memory_base = FLASH0_BASE_S,
-#endif /* __DOMAIN_NS == 1 */
-    .data        = &(ARM_FLASH0_DEV_DATA)};
+#endif
+    .data = &(ARM_FLASH0_DEV_DATA),
+};
 
 struct arm_flash_dev_t *FLASH0_DEV = &ARM_FLASH0_DEV;
-
-/*
- * Functions
- */
 
 static ARM_DRIVER_VERSION ARM_Flash_GetVersion(void)
 {
@@ -168,13 +261,20 @@ static int32_t ARM_Flash_Initialize(ARM_Flash_SignalEvent_t cb_event)
         DriverCapabilities.data_width >= DATA_WIDTH_ENUM_SIZE) {
         return ARM_DRIVER_ERROR;
     }
-    /* Nothing to be done */
+
+    /* Software reset the AXI Quad SPI core */
+    qspi_wr(AXI_QSPI_SRR, SRR_SW_RESET);
+
+    /* Enable SPI in master mode; deassert all slave selects */
+    qspi_wr(AXI_QSPI_SPICR,
+            SPICR_SPE | SPICR_MASTER | SPICR_TX_FIFO_RST | SPICR_RX_FIFO_RST);
+    qspi_wr(AXI_QSPI_SPISSR, 0xFFFFFFFFU);
+
     return ARM_DRIVER_OK;
 }
 
 static int32_t ARM_Flash_Uninitialize(void)
 {
-    /* Nothing to be done */
     return ARM_DRIVER_OK;
 }
 
@@ -182,10 +282,7 @@ static int32_t ARM_Flash_PowerControl(ARM_POWER_STATE state)
 {
     switch (state) {
     case ARM_POWER_FULL:
-        /* Nothing to be done */
         return ARM_DRIVER_OK;
-        break;
-
     case ARM_POWER_OFF:
     case ARM_POWER_LOW:
     default:
@@ -198,26 +295,20 @@ static int32_t ARM_Flash_ReadData(uint32_t addr, void *data, uint32_t cnt)
     uint32_t start_addr = FLASH0_DEV->memory_base + addr;
     int32_t rc = 0;
 
-    /* CMSIS ARM_FLASH_ReadData API requires the `addr` data type size aligned.
-     * Data type size is specified by the data_width in ARM_FLASH_CAPABILITIES.
-     */
     if (addr % data_width_byte[DriverCapabilities.data_width] != 0) {
         return ARM_DRIVER_ERROR_PARAMETER;
     }
 
-    /* Conversion between data items and bytes */
     cnt *= data_width_byte[DriverCapabilities.data_width];
 
-    /* Check flash memory boundaries */
     rc = is_range_valid(FLASH0_DEV, addr + cnt);
     if (rc != 0) {
         return ARM_DRIVER_ERROR_PARAMETER;
     }
 
-    /* Flash interface just emulated over SRAM, use memcpy */
+    /* XIP: read directly from the memory-mapped SPI flash window */
     memcpy(data, (void *)start_addr, cnt);
 
-    /* Conversion between bytes and data items */
     cnt /= data_width_byte[DriverCapabilities.data_width];
 
     return cnt;
@@ -226,13 +317,10 @@ static int32_t ARM_Flash_ReadData(uint32_t addr, void *data, uint32_t cnt)
 static int32_t ARM_Flash_ProgramData(uint32_t addr, const void *data,
                                      uint32_t cnt)
 {
-    uint32_t start_addr = FLASH0_DEV->memory_base + addr;
     int32_t rc = 0;
 
-    /* Conversion between data items and bytes */
     cnt *= data_width_byte[DriverCapabilities.data_width];
 
-    /* Check flash memory boundaries and alignment with minimal write size */
     rc  = is_range_valid(FLASH0_DEV, addr + cnt);
     rc |= is_write_aligned(FLASH0_DEV, addr);
     rc |= is_write_aligned(FLASH0_DEV, cnt);
@@ -240,13 +328,8 @@ static int32_t ARM_Flash_ProgramData(uint32_t addr, const void *data,
         return ARM_DRIVER_ERROR_PARAMETER;
     }
 
-    /* Check if the flash area to write the data was erased previously */
-    rc = is_flash_ready_to_write((const uint8_t*)start_addr, cnt);
+    flash_page_program(addr, (const uint8_t *)data, cnt);
 
-    /* Flash interface just emulated over SRAM, use memcpy */
-    memcpy((void *)start_addr, data, cnt);
-
-    /* Conversion between bytes and data items */
     cnt /= data_width_byte[DriverCapabilities.data_width];
 
     return cnt;
@@ -254,8 +337,7 @@ static int32_t ARM_Flash_ProgramData(uint32_t addr, const void *data,
 
 static int32_t ARM_Flash_EraseSector(uint32_t addr)
 {
-    uint32_t start_addr = FLASH0_DEV->memory_base + addr;
-    uint32_t rc = 0;
+    int32_t rc = 0;
 
     rc  = is_range_valid(FLASH0_DEV, addr);
     rc |= is_sector_aligned(FLASH0_DEV, addr);
@@ -263,32 +345,24 @@ static int32_t ARM_Flash_EraseSector(uint32_t addr)
         return ARM_DRIVER_ERROR_PARAMETER;
     }
 
-    /* Flash interface just emulated over SRAM, use memset */
-    memset((void *)start_addr,
-           FLASH0_DEV->data->erased_value,
-           FLASH0_DEV->data->sector_size);
+    flash_sector_erase(addr);
+
     return ARM_DRIVER_OK;
 }
 
 static int32_t ARM_Flash_EraseChip(void)
 {
-    uint32_t i;
-    uint32_t addr = FLASH0_DEV->memory_base;
-    int32_t rc = ARM_DRIVER_ERROR_UNSUPPORTED;
+    uint8_t cmd = CMD_CHIP_ERASE;
 
-    /* Check driver capability erase_chip bit */
-    if (DriverCapabilities.erase_chip == 1) {
-        for (i = 0; i < FLASH0_DEV->data->sector_count; i++) {
-            /* Flash interface just emulated over SRAM, use memset */
-            memset((void *)addr,
-                   FLASH0_DEV->data->erased_value,
-                   FLASH0_DEV->data->sector_size);
-
-            addr += FLASH0_DEV->data->sector_size;
-            rc = ARM_DRIVER_OK;
-        }
+    if (DriverCapabilities.erase_chip != 1) {
+        return ARM_DRIVER_ERROR_UNSUPPORTED;
     }
-    return rc;
+
+    flash_write_enable();
+    qspi_send(&cmd, 1);
+    flash_wait_wip_clear();
+
+    return ARM_DRIVER_OK;
 }
 
 static ARM_FLASH_STATUS ARM_Flash_GetStatus(void)
