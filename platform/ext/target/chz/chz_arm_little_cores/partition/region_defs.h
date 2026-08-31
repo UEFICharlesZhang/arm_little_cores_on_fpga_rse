@@ -137,12 +137,12 @@
 
 #ifdef BL2
 /* Bootloader regions */
-#define BL2_CODE_START    (S_ROM_ALIAS(FLASH_AREA_BL2_OFFSET))
-#define BL2_CODE_SIZE     (FLASH_AREA_BL2_SIZE)
+#define BL2_CODE_START    (0x00000000)   /* ITCM (RSE 引导) */
+#define BL2_CODE_SIZE     (0x00010000)   /* 64 KB */
 #define BL2_CODE_LIMIT    (BL2_CODE_START + BL2_CODE_SIZE - 1)
 
-#define BL2_DATA_START    (S_RAM_ALIAS(0x0))
-#define BL2_DATA_SIZE     (TOTAL_RAM_SIZE)
+#define BL2_DATA_START    (0x20000000)   /* DTCM */
+#define BL2_DATA_SIZE     (0x00010000)   /* 64 KB */
 #define BL2_DATA_LIMIT    (BL2_DATA_START + BL2_DATA_SIZE - 1)
 #endif /* BL2 */
 
