@@ -137,7 +137,7 @@
 
 #ifdef BL2
 /* Bootloader regions */
-#define BL2_CODE_START    (0x00000000)   /* ITCM (RSE 引导) */
+#define BL2_CODE_START    (0x10000000)   /* XIP from SPI NOR flash */
 #define BL2_CODE_SIZE     (0x00010000)   /* 64 KB */
 #define BL2_CODE_LIMIT    (BL2_CODE_START + BL2_CODE_SIZE - 1)
 

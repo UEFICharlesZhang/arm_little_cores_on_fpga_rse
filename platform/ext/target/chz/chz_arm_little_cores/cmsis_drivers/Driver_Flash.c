@@ -46,6 +46,8 @@
 #define SPICR_TX_FIFO_RST    (1u << 4)
 #define SPICR_RX_FIFO_RST    (1u << 5)
 #define SPICR_MTI            (1u << 6)   /* Master Transaction Inhibit   */
+/* [TODO: 核对] XIP 模式位 (PG153); 若 IP 支持 XIP 与 legacy 并存则无需切换 */
+#define SPICR_XIP_MODE       (1u << 23)
 
 /* SPISR bit fields (PG153, [TODO: 核对]) */
 #define SPISR_RX_EMPTY       (1u << 0)
@@ -109,6 +111,16 @@ static void qspi_send(const uint8_t *buf, uint32_t len)
     }
 }
 
+static void qspi_xip_enable(void)
+{
+    qspi_wr(AXI_QSPI_SPICR, qspi_rd(AXI_QSPI_SPICR) | SPICR_XIP_MODE);
+}
+
+static void qspi_xip_disable(void)
+{
+    qspi_wr(AXI_QSPI_SPICR, qspi_rd(AXI_QSPI_SPICR) & ~SPICR_XIP_MODE);
+}
+
 /* ------------------------------------------------------------------ */
 /* SPI NOR flash operations                                            */
 /* ------------------------------------------------------------------ */
@@ -139,9 +151,11 @@ static void flash_sector_erase(uint32_t addr)
         (uint8_t)(addr),
     };
 
+    qspi_xip_disable();
     flash_write_enable();
     qspi_send(cmd, sizeof(cmd));
     flash_wait_wip_clear();
+    qspi_xip_enable();
 }
 
 static void flash_page_program(uint32_t addr, const uint8_t *data, uint32_t len)
@@ -153,10 +167,12 @@ static void flash_page_program(uint32_t addr, const uint8_t *data, uint32_t len)
         (uint8_t)(addr),
     };
 
+    qspi_xip_disable();
     flash_write_enable();
     qspi_send(cmd, sizeof(cmd));
     qspi_send(data, len);
     flash_wait_wip_clear();
+    qspi_xip_enable();
 }
 
 /* ------------------------------------------------------------------ */
@@ -358,9 +374,11 @@ static int32_t ARM_Flash_EraseChip(void)
         return ARM_DRIVER_ERROR_UNSUPPORTED;
     }
 
+    qspi_xip_disable();
     flash_write_enable();
     qspi_send(&cmd, 1);
     flash_wait_wip_clear();
+    qspi_xip_enable();
 
     return ARM_DRIVER_OK;
 }

@@ -218,22 +218,23 @@
 #define TFM_OTP_NV_COUNTERS_BACKUP_AREA_ADDR (TFM_OTP_NV_COUNTERS_AREA_ADDR + \
                                               TFM_OTP_NV_COUNTERS_AREA_SIZE)
 
-/* CHZ SoC: firmware runs only from TCM (no DDR for code/data; DDR is reserved
- * for other uses). BL2 and tfm_s both run from ITCM (0x0000_0000) / DTCM
- * (0x2000_0000), overwriting each other across boot stages. Images are stored
- * in SPI NOR flash (0x1000_0000) and copied to TCM by the ROM code / BL2. */
-#define S_ROM_ALIAS_BASE  (0x00000000)
-#define NS_ROM_ALIAS_BASE (0x00000000)
+/* CHZ SoC: firmware runs only from TCM (no DDR for code/data; DDR is reserved).
+ * BL2 executes XIP from SPI NOR flash (0x1000_0000); tfm_s is copied by BL2 to
+ * ITCM (0x0001_0000) and runs there, data in DTCM (0x2000_0000). During ITS/PS
+ * the flash XIP window can be disabled without affecting tfm_s. */
+#define S_ROM_ALIAS_BASE  (0x10000000)
+#define NS_ROM_ALIAS_BASE (0x10000000)
 
-/* Image load addresses: where BL2 copies the images (ITCM). */
-#define S_IMAGE_LOAD_ADDRESS  (0x00000000)
-#define NS_IMAGE_LOAD_ADDRESS (0x00000000)
+/* Image load addresses: where BL2 copies the images (ITCM, non-zero so the
+ * MCUboot header marks the image as RAM_LOAD rather than XIP). */
+#define S_IMAGE_LOAD_ADDRESS  (0x00010000)
+#define NS_IMAGE_LOAD_ADDRESS (0x00020000)
 
 /* RW data lives in DTCM */
 #define S_RAM_ALIAS_BASE  (0x20000000)
-#define NS_RAM_ALIAS_BASE (0x20000000)
+#define NS_RAM_ALIAS_BASE (0x20010000)
 
 #define TOTAL_ROM_SIZE FLASH_TOTAL_SIZE
-#define TOTAL_RAM_SIZE (0x10000)     /* 64 KB DTCM */
+#define TOTAL_RAM_SIZE (0x10000)     /* 64 KB used (DTCM is 256 KB) */
 
 #endif /* __FLASH_LAYOUT_H__ */
