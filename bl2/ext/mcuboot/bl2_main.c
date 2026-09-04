@@ -110,6 +110,33 @@ static inline void uart_putch(char ch)
 }
 #endif /* TEST_BL2 */
 
+
+/* CHZ bring-up: direct PL011 markers (same helper as boot_hal_bl2.c) */
+#if defined(CHZ_DBG_BL2)
+#include <stdint.h>
+static void chz_dbg_putc(char c)
+{
+    while (*(volatile uint32_t *)0x40000018u & (1u << 5))
+        ;
+    *(volatile uint32_t *)0x40000000u = (uint32_t)c;
+}
+static void chz_dbg_puts(const char *str)
+{
+    while (*str)
+        chz_dbg_putc(*str++);
+}
+static void chz_dbg_hex(uint32_t v)
+{
+    static const char h[] = "0123456789abcdef";
+    int i;
+    chz_dbg_puts("0x");
+    for (i = 28; i >= 0; i -= 4)
+        chz_dbg_putc(h[(v >> i) & 0xF]);
+}
+#define CHZ_DBG(fmt)  chz_dbg_puts(fmt)
+#define CHZ_DBG_V(fmt, v)  do { chz_dbg_puts(fmt); chz_dbg_hex(v); chz_dbg_puts("\r\n"); } while (0)
+#endif /* CHZ_DBG_BL2 */
+
 int main(void)
 {
     int err;
@@ -186,6 +213,11 @@ int main(void)
      * has already happened
      */
     psa_status_t status = psa_crypto_init();
+#if defined(CHZ_DBG_BL2)
+    chz_dbg_puts("[BL2] psa_crypto_init done, status=");
+    chz_dbg_hex(status);
+    chz_dbg_puts("\r\n");
+#endif
     if (status != PSA_SUCCESS) {
         BOOT_LOG_ERR("PSA Crypto init failed with error code %d", status);
         boot_platform_error_state(status);
@@ -211,6 +243,11 @@ int main(void)
             boot_platform_error_state(err);
         }
 
+#if defined(CHZ_DBG_BL2)
+        chz_dbg_puts("[BL2] boot_go image ");
+        chz_dbg_hex(image_id);
+        chz_dbg_puts("\r\n");
+#endif
         do {
             /* Primary goal to zeroize the 'rsp' is to avoid to accidentally load
              * the NS image in case of a fault injection attack. However, it is

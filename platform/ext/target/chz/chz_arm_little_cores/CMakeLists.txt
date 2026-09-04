@@ -124,6 +124,14 @@ if(BL2)
             cmsis_drivers/Driver_USART.c
     )
 
+    # CHZ bring-up: UART markers in boot_hal hooks (disable once BL2 boots)
+    target_compile_definitions(platform_bl2
+        PRIVATE CHZ_DBG_BL2=1
+    )
+    target_compile_definitions(bl2
+        PRIVATE CHZ_DBG_BL2=1
+    )
+
     target_include_directories(platform_bl2
         PUBLIC
             partition

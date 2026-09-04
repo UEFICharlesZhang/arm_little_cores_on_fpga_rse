@@ -23,6 +23,38 @@
 #include "psa/crypto.h"
 #endif /* MCUBOOT_USE_PSA_CRYPTO */
 
+
+/* ---- CHZ bring-up debug: direct PL011 (core0 console UART0) prints ---- */
+#if defined(CHZ_DBG_BL2)
+#include <stdint.h>
+static void chz_dbg_init(void)
+{
+    *(volatile uint32_t *)0x40000024u = 54u;
+    *(volatile uint32_t *)0x40000028u = 16u;
+    *(volatile uint32_t *)0x4000002Cu = 0x60u;
+    *(volatile uint32_t *)0x40000030u = 0x301u;
+}
+static void chz_dbg_putc(char c)
+{
+    while (*(volatile uint32_t *)0x40000018u & (1u << 5))
+        ;
+    *(volatile uint32_t *)0x40000000u = (uint32_t)c;
+}
+static void chz_dbg_puts(const char *str)
+{
+    while (*str)
+        chz_dbg_putc(*str++);
+}
+static void chz_dbg_hex(uint32_t v)
+{
+    static const char h[] = "0123456789abcdef";
+    int i;
+    chz_dbg_puts("0x");
+    for (i = 28; i >= 0; i -= 4)
+        chz_dbg_putc(h[(v >> i) & 0xF]);
+}
+#endif /* CHZ_DBG_BL2 */
+
 /* Flash device names must be specified by target */
 #ifdef FLASH_DEV_NAME
 extern ARM_DRIVER_FLASH FLASH_DEV_NAME;
@@ -120,6 +152,10 @@ __WEAK __attribute__((naked)) void boot_jump_to_next_image(uint32_t reset_handle
 __WEAK int32_t boot_platform_init(void)
 {
     int32_t result;
+#if defined(CHZ_DBG_BL2)
+    chz_dbg_init();
+    chz_dbg_puts("\r\n[BL2] boot_platform_init\r\n");
+#endif
 
 #if defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__) \
  || defined(__ARM_ARCH_8_1M_MAIN__)
@@ -161,6 +197,9 @@ __WEAK int32_t boot_platform_init(void)
 
 __WEAK int32_t boot_platform_post_init(void)
 {
+#if defined(CHZ_DBG_BL2)
+    chz_dbg_puts("[BL2] boot_platform_post_init\r\n");
+#endif
     fih_delay_init();
 
     return 0;
@@ -168,6 +207,61 @@ __WEAK int32_t boot_platform_post_init(void)
 
 __WEAK void boot_platform_start_next_image(struct boot_arm_vector_table *vt)
 {
+#if defined(CHZ_DBG_BL2)
+    chz_dbg_puts("[BL2] start_next_image vt=");
+    chz_dbg_hex((uint32_t)(uintptr_t)vt);
+    chz_dbg_puts("\r\n");
+#endif
+#if defined(CHZ_DBG_BL2)
+    /* CHZ SoC has no XIP: copy the image payload from its primary slot
+     * (mcuboot header + payload at 0x10000, payload at +0x400, image
+     * size in the header at +12) into RAM at the run address (vt)
+     * before jumping.  Verified geometry: SP vector at payload+0,
+     * img_size 0x49E0. */
+    {
+        uint32_t slot = 0x00010000u;
+        uint32_t hdr_sz = 0x400u;
+        uint32_t img_size = 0;
+        int32_t rc;
+        uint32_t off;
+        uint8_t hdr[16];
+        extern ARM_DRIVER_FLASH FLASH_DEV_NAME;
+
+        rc = FLASH_DEV_NAME.ReadData(slot, hdr, 16);
+        if (rc > 0) {
+            img_size = (uint32_t)hdr[12] | ((uint32_t)hdr[13] << 8) |
+                       ((uint32_t)hdr[14] << 16) | ((uint32_t)hdr[15] << 24);
+        }
+        chz_dbg_puts("[BL2] copying image: slot=");
+        chz_dbg_hex(slot);
+        chz_dbg_puts(" hdr_sz=");
+        chz_dbg_hex(hdr_sz);
+        chz_dbg_puts(" img_size=");
+        chz_dbg_hex(img_size);
+        chz_dbg_puts(" -> dst=");
+        chz_dbg_hex((uint32_t)(uintptr_t)vt);
+        chz_dbg_puts("\r\n");
+        if (img_size == 0 || img_size > 0x10000u) {
+            chz_dbg_puts("[BL2] bad img_size, stuck\r\n");
+            while (1) { }
+        }
+        for (off = 0; off < img_size; off += 256) {
+            uint32_t chunk = (img_size - off > 256) ? 256 : img_size - off;
+            uint8_t buf[256];
+            uint32_t i;
+            rc = FLASH_DEV_NAME.ReadData(slot + hdr_sz + off, buf, chunk);
+            if (rc <= 0) {
+                chz_dbg_puts("[BL2] read fail @");
+                chz_dbg_hex(off);
+                chz_dbg_puts("\r\n");
+                while (1) { }
+            }
+            for (i = 0; i < chunk; i++)
+                ((volatile uint8_t *)(uintptr_t)vt)[off + i] = buf[i];
+        }
+        chz_dbg_puts("[BL2] copy done, jumping\r\n");
+    }
+#endif
     /* Clang at O0, stores variables on the stack with SP relative addressing.
      * When manually set the SP then the place of reset vector is lost.
      * Static variables are stored in 'data' or 'bss' section, change of SP has
@@ -225,6 +319,11 @@ __WEAK void boot_platform_start_next_image(struct boot_arm_vector_table *vt)
 
 __WEAK __NO_RETURN void boot_platform_error_state(uint32_t error)
 {
+#if defined(CHZ_DBG_BL2)
+    chz_dbg_puts("[BL2] ERROR state err=");
+    chz_dbg_hex(error);
+    chz_dbg_puts("\r\n");
+#endif
     FIH_PANIC;
 #if defined(__ICCARM__)
 #pragma diag_default = Pe111
