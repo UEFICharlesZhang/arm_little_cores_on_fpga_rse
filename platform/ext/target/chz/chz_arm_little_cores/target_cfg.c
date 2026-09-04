@@ -269,7 +269,6 @@ enum tfm_plat_err_t nvic_interrupt_target_state_cfg(void)
 /*----------------- NVIC interrupt enabling for S peripherals ----------------*/
 enum tfm_plat_err_t nvic_interrupt_enable(void)
 {
-    struct spctrl_def* spctrl = CMSDK_SPCTRL;
     int32_t ret = ARM_DRIVER_OK;
 
     /* MPC interrupt enabling */
@@ -283,6 +282,9 @@ enum tfm_plat_err_t nvic_interrupt_enable(void)
     }
     NVIC_EnableIRQ(MPC_IRQn);
 
+    /* (No SPCTRL on this SoC — the SSE200 PPC interrupt config is
+     * omitted.) */
+#if 0
     /* PPC interrupt enabling */
     /* Clear pending PPC interrupts */
     /* In the PPC configuration function, we have used the Non-Secure
@@ -307,6 +309,8 @@ enum tfm_plat_err_t nvic_interrupt_enable(void)
 #endif
 
     return TFM_PLAT_ERR_SUCCESS;
+}
+#endif /* 0 — no SPCTRL on this SoC */
 }
 
 /*------------------- SAU/IDAU configuration functions -----------------------*/
@@ -384,7 +388,6 @@ const struct sau_cfg_t sau_cfg[] = {
 
 FIH_RET_TYPE(int32_t) sau_and_idau_cfg(void)
 {
-    struct spctrl_def *spctrl = CMSDK_SPCTRL;
     uint32_t i;
 
     /* Ensure all memory accesses are completed */
@@ -401,8 +404,7 @@ FIH_RET_TYPE(int32_t) sau_and_idau_cfg(void)
                     SAU_RLAR_ENABLE_Msk;
     }
 
-    /* Allows SAU to define the code region as a NSC */
-    spctrl->nsccfg |= NSCCFG_CODENSC;
+    /* (No SPCTRL on this SoC — the SSE200 nsccfg write is omitted.) */
 
     /* Ensure the write is completed and flush pipeline */
     __DSB();
@@ -451,102 +453,15 @@ fih_ret fih_verify_sau_and_idau_cfg(void)
 
 FIH_RET_TYPE(int32_t) mpc_init_cfg(void)
 {
-    int32_t ret = ARM_DRIVER_OK;
-
-    ret = Driver_SRAM1_MPC.Initialize();
-    if (ret != ARM_DRIVER_OK) {
-        FIH_RET(ret);
-    }
-
-    ret = Driver_SRAM1_MPC.ConfigRegion(
-                                      memory_regions.non_secure_partition_base,
-                                      memory_regions.non_secure_partition_limit,
-                                      ARM_MPC_ATTR_NONSECURE);
-    if (ret != ARM_DRIVER_OK) {
-        FIH_RET(ret);
-    }
-
-#ifdef BL2
-    /* Secondary image region */
-    ret = Driver_SRAM1_MPC.ConfigRegion(memory_regions.secondary_partition_base,
-                                  memory_regions.secondary_partition_limit,
-                                  ARM_MPC_ATTR_NONSECURE);
-    if (ret != ARM_DRIVER_OK) {
-        FIH_RET(ret);
-    }
-#endif /* BL2 */
-
-    ret = Driver_SRAM2_MPC.Initialize();
-    if (ret != ARM_DRIVER_OK) {
-        FIH_RET(ret);
-    }
-
-    ret = Driver_SRAM2_MPC.ConfigRegion(NS_DATA_START, NS_DATA_LIMIT,
-                                        ARM_MPC_ATTR_NONSECURE);
-#if defined(PSA_API_TEST_NS) && !defined(PSA_API_TEST_IPC)
-    ret = Driver_SRAM2_MPC.ConfigRegion(DEV_APIS_TEST_NVMEM_REGION_START,
-                                        DEV_APIS_TEST_NVMEM_REGION_LIMIT,
-                                        ARM_MPC_ATTR_NONSECURE);
-#endif
-    if (ret != ARM_DRIVER_OK) {
-        FIH_RET(ret);
-    }
-
-    /* Lock down the MPC configuration */
-    ret = Driver_SRAM1_MPC.LockDown();
-    if (ret != ARM_DRIVER_OK) {
-        FIH_RET(ret);
-    }
-
-    ret = Driver_SRAM2_MPC.LockDown();
-    if (ret != ARM_DRIVER_OK) {
-        FIH_RET(ret);
-    }
-
-    /* Add barriers to assure the MPC configuration is done before continue
-     * the execution.
-     */
-    __DSB();
-    __ISB();
-
+    /* No MPC hardware on this SoC (SSE200-style 0x50083000/0x58007000
+     * bases do not exist); access would HardFault.  No-op. */
     FIH_RET(ARM_DRIVER_OK);
 }
 
 #ifdef TFM_FIH_PROFILE_ON
 fih_ret fih_verify_mpc_cfg(void)
 {
-    ARM_MPC_SEC_ATTR attr;
-
-    Driver_SRAM1_MPC.GetRegionConfig(memory_regions.non_secure_partition_base,
-                                     memory_regions.non_secure_partition_limit,
-                                     &attr);
-    if (attr != ARM_MPC_ATTR_NONSECURE) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-
-#ifdef BL2
-    Driver_SRAM1_MPC.GetRegionConfig(memory_regions.secondary_partition_base,
-                                     memory_regions.secondary_partition_limit,
-                                     &attr);
-    if (attr != ARM_MPC_ATTR_NONSECURE) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-#endif /* BL2 */
-
-    Driver_SRAM2_MPC.GetRegionConfig(NS_DATA_START, NS_DATA_LIMIT, &attr);
-    if (attr != ARM_MPC_ATTR_NONSECURE) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-
-#if defined(PSA_API_TEST_NS) && !defined(PSA_API_TEST_IPC)
-    Driver_SRAM2_MPC.GetRegionConfig(DEV_APIS_TEST_NVMEM_REGION_START,
-                                     DEV_APIS_TEST_NVMEM_REGION_LIMIT,
-                                     &attr);
-    if (attr != ARM_MPC_ATTR_NONSECURE) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-#endif /* PSA_API_TEST_NS && !PSA_API_TEST_IPC */
-
+    /* No MPC hardware; nothing to verify. */
     FIH_RET(ARM_DRIVER_OK);
 }
 #endif /* TFM_FIH_PROFILE_ON */
@@ -556,177 +471,50 @@ fih_ret fih_verify_mpc_cfg(void)
 
 FIH_RET_TYPE(int32_t) ppc_init_cfg(void)
 {
-    struct spctrl_def* spctrl = CMSDK_SPCTRL;
-    struct nspctrl_def* nspctrl = CMSDK_NSPCTRL;
-
-    /* Grant non-secure access to peripherals in the PPC0
-     * (timer0 and 1, dualtimer, watchdog, mhu 0 and 1)
-     */
-     spctrl->apbnsppc0 |= (1U << CMSDK_TIMER0_APB_PPC_POS) |
-                          (1U << CMSDK_TIMER1_APB_PPC_POS) |
-                          (1U << CMSDK_DTIMER_APB_PPC_POS) |
-                          (1U << CMSDK_MHU0_APB_PPC_POS) |
-                          (1U << CMSDK_MHU1_APB_PPC_POS);
-
-    /* Grant non-secure access for APB peripherals on EXP1 */
-    spctrl->apbnsppcexp1 |= (1U << CMSDK_SPI0_APB_PPC_POS) |
-                            (1U << CMSDK_SPI1_APB_PPC_POS) |
-                            (1U << CMSDK_SPI2_APB_PPC_POS) |
-                            (1U << CMSDK_SPI3_APB_PPC_POS) |
-                            (1U << CMSDK_SPI4_APB_PPC_POS) |
-                            (1U << CMSDK_UART0_APB_PPC_POS) |
-#ifdef SECURE_UART1
-    /* To statically configure a peripheral as secure, skip PPC NS peripheral
-     * configuration for the given device.
-     */
-#else
-                            (1U << CMSDK_UART1_APB_PPC_POS) |
-#endif
-
-#ifndef PSA_FF_TEST_SECURE_UART2
-                            (1U << CMSDK_UART2_APB_PPC_POS) |
-#endif
-                            (1U << CMSDK_UART3_APB_PPC_POS) |
-                            (1U << CMSDK_UART4_APB_PPC_POS) |
-                            (1U << CMSDK_I2C0_APB_PPC_POS) |
-                            (1U << CMSDK_I2C1_APB_PPC_POS) |
-                            (1U << CMSDK_I2C2_APB_PPC_POS) |
-                            (1U << CMSDK_I2C3_APB_PPC_POS);
-    /* Grant non-secure access for APB peripherals on EXP2 */
-    spctrl->apbnsppcexp2 |= (1U << CMSDK_FPGA_SCC_PPC_POS) |
-                            (1U << CMSDK_FPGA_AUDIO_PPC_POS) |
-                            (1U << CMSDK_FPGA_IO_PPC_POS);
-
-    /* Grant non-secure access to all peripherals on AHB EXP:
-     * Make sure that all possible peripherals are enabled by default
-     */
-    spctrl->ahbnsppcexp0 |= (1U << CMSDK_VGA_PPC_POS) |
-                            (1U << CMSDK_GPIO0_PPC_POS) |
-                            (1U << CMSDK_GPIO1_PPC_POS) |
-                            (1U << CMSDK_GPIO2_PPC_POS) |
-                            (1U << CMSDK_GPIO3_PPC_POS) |
-                            (1U << MPS2_ETHERNET_PPC_POS);
-
-    spctrl->ahbnsppcexp1 |= (1U << CMSDK_DMA0_PPC_POS) |
-                            (1U << CMSDK_DMA1_PPC_POS) |
-                            (1U << CMSDK_DMA2_PPC_POS) |
-                            (1U << CMSDK_DMA3_PPC_POS);
-
-    /* in NS, grant un-privileged for UART0 */
-    nspctrl->apbnspppcexp1 |= (1U << CMSDK_UART0_APB_PPC_POS);
-
-    /* in NS, grant un-privileged access for LEDs */
-    nspctrl->apbnspppcexp2 |= (1U << CMSDK_FPGA_SCC_PPC_POS) |
-                              (1U << CMSDK_FPGA_IO_PPC_POS);
-
-    /* Configure the response to a security violation as a
-     * bus error instead of RAZ/WI
-     */
-    spctrl->secrespcfg |= 1U;
-
+    /* No PPC/SPCTRL hardware on this SoC; no-op (see mpc_init_cfg). */
     FIH_RET(ARM_DRIVER_OK);
 }
 
 #ifdef TFM_FIH_PROFILE_ON
 fih_ret fih_verify_ppc_cfg(void)
 {
-    struct spctrl_def* spctrl = CMSDK_SPCTRL;
-    struct nspctrl_def* nspctrl = CMSDK_NSPCTRL;
-
-    /* Check non-secure access to peripherals in the PPC0
-     * (timer0 and 1, dualtimer, watchdog)
-     */
-    if ((!(spctrl->apbnsppc0 & (1U << CMSDK_TIMER0_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppc0 & (1U << CMSDK_TIMER1_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppc0 & (1U << CMSDK_DTIMER_APB_PPC_POS)))) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-
-    /* Check non-secure access for APB peripherals on EXP1 */
-    if ((!(spctrl->apbnsppcexp1 & (1U << CMSDK_SPI0_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_SPI1_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_SPI2_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_SPI3_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_SPI4_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_UART0_APB_PPC_POS))) ||
-#ifdef SECURE_UART1
-    /* Peripheral is statically configured as secure, skip check on PPC NS
-     * peripheral configuration for the given device.
-     */
-#else
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_UART1_APB_PPC_POS))) ||
-
-#endif
-
-#ifndef PSA_FF_TEST_SECURE_UART2
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_UART2_APB_PPC_POS))) ||
-#endif
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_UART3_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_UART4_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_I2C0_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_I2C1_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_I2C2_APB_PPC_POS))) ||
-        (!(spctrl->apbnsppcexp1 & (1U << CMSDK_I2C3_APB_PPC_POS)))) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-
-    /* In NS, check un-privileged for UART0 */
-    if (!(nspctrl->apbnspppcexp1 & (1U << CMSDK_UART0_APB_PPC_POS))) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-
-    /* In NS, check un-privileged access for LEDs */
-    if ((!(nspctrl->apbnspppcexp2 & (1U << CMSDK_FPGA_SCC_PPC_POS))) ||
-        (!(nspctrl->apbnspppcexp2 & (1U << CMSDK_FPGA_IO_PPC_POS)))) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-
-    /* Check whether the response to a security violation is a
-     * bus error instead of RAZ/WI
-     */
-    if (!(spctrl->secrespcfg & 1U)) {
-        FIH_RET(ARM_DRIVER_ERROR);
-    }
-
+    /* No PPC hardware; nothing to verify. */
     FIH_RET(ARM_DRIVER_OK);
 }
 #endif /* TFM_FIH_PROFILE_ON */
 
 void ppc_configure_to_non_secure(enum ppc_bank_e bank, uint16_t pos)
 {
-    /* Setting NS flag for peripheral to enable NS access */
-    struct spctrl_def* spctrl = CMSDK_SPCTRL;
-    ((uint32_t*)&(spctrl->ahbnsppc0))[bank] |= (1U << pos);
+    /* No PPC/SPCTRL hardware on this SoC; no-op. */
+    (void)bank;
+    (void)pos;
 }
 
 FIH_RET_TYPE(int32_t) ppc_configure_to_secure(enum ppc_bank_e bank, uint16_t pos)
 {
-    /* Clear NS flag for peripheral to prevent NS access */
-    struct spctrl_def* spctrl = CMSDK_SPCTRL;
-    ((uint32_t*)&(spctrl->ahbnsppc0))[bank] &= ~(1U << pos);
-
+    /* No PPC/SPCTRL hardware on this SoC; no-op. */
+    (void)bank;
+    (void)pos;
     FIH_RET(ARM_DRIVER_OK);
 }
 
 FIH_RET_TYPE(int32_t) ppc_en_secure_unpriv(enum ppc_bank_e bank, uint16_t pos)
 {
-    struct spctrl_def* spctrl = CMSDK_SPCTRL;
-    ((uint32_t*)&(spctrl->ahbspppc0))[bank] |= (1U << pos);
-
+    /* No PPC/SPCTRL hardware on this SoC; no-op. */
+    (void)bank;
+    (void)pos;
     FIH_RET(ARM_DRIVER_OK);
 }
 
 FIH_RET_TYPE(int32_t) ppc_clr_secure_unpriv(enum ppc_bank_e bank, uint16_t pos)
 {
-    struct spctrl_def* spctrl = CMSDK_SPCTRL;
-    ((uint32_t*)&(spctrl->ahbspppc0))[bank] &= ~(1U << pos);
-
+    /* No PPC/SPCTRL hardware on this SoC; no-op. */
+    (void)bank;
+    (void)pos;
     FIH_RET(ARM_DRIVER_OK);
 }
 
 void ppc_clear_irq(void)
 {
-    struct spctrl_def* spctrl = CMSDK_SPCTRL;
-    /* Clear APB PPC EXP2 IRQ */
-    spctrl->secppcintclr = CMSDK_APB_PPCEXP2_INT_POS_MASK;
+    /* No PPC/SPCTRL hardware on this SoC; no-op. */
 }
