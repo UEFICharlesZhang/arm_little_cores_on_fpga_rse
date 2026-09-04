@@ -13,6 +13,16 @@
 
 extern const struct memory_region_limits memory_regions;
 
+/* Minimal fake NS "vector table" + code + stack in ITCM at 0x18000 (SAU
+ * region marked NS — tfm_s ends well below 0x18000). The NS DTCM window is
+ * deliberately NOT used: stores to DTCM addresses with bit 11 set land one
+ * byte off on this SoC (observed on hardware), so everything the NS side
+ * touches lives in ITCM. */
+#define CHZ_NS_IDLE_BASE   (0x00018000u)
+#define CHZ_NS_IDLE_CODE   (CHZ_NS_IDLE_BASE + 0x800u) /* code, even address */
+#define CHZ_NS_IDLE_ENTRY  (CHZ_NS_IDLE_CODE | 1u)      /* entry, thumb bit */
+#define CHZ_NS_IDLE_STACK  (0x0001BF00u)
+
 FIH_RET_TYPE(enum tfm_hal_status_t) tfm_hal_platform_init(void)
 {
     enum tfm_plat_err_t plat_err = TFM_PLAT_ERR_SYSTEM_ERR;
@@ -66,20 +76,40 @@ FIH_RET_TYPE(enum tfm_hal_status_t) tfm_hal_platform_init(void)
 #endif
 #endif
 
+    /* No NS firmware exists on this SoC (the flash XIP window that used to
+     * hold the NS image is gone). Park the SPM's NS launch on a WFI stub
+     * placed in the SAU-NS DTCM window, otherwise backend_system_run() jumps
+     * to the dead NS alias and takes an INVTRAN SecureFault. All 512 vectors
+     * must point at the stub: the core sits in WFI, but any pending IRQ would
+     * otherwise vector through a NULL entry and double-fault into lockup. */
+    {
+        volatile uint32_t *vt = (volatile uint32_t *)CHZ_NS_IDLE_BASE;
+        int i;
+
+        for (i = 0; i < 512; i++) {
+            vt[i] = CHZ_NS_IDLE_ENTRY;
+        }
+        vt[0] = CHZ_NS_IDLE_STACK;
+        vt[1] = CHZ_NS_IDLE_ENTRY;
+        /* wfi; b . — written as one 32-bit store: 16-bit stores take a
+         * misaligned byte-lane path on this SoC's custom AHB/TCM wiring. */
+        *(volatile uint32_t *)CHZ_NS_IDLE_CODE = 0xE7FDBF30u;
+    }
+
     FIH_RET(TFM_HAL_SUCCESS);
 }
 
 uint32_t tfm_hal_get_ns_VTOR(void)
 {
-    return memory_regions.non_secure_code_start;
+    return CHZ_NS_IDLE_BASE;
 }
 
 uint32_t tfm_hal_get_ns_MSP(void)
 {
-    return *((uint32_t *)memory_regions.non_secure_code_start);
+    return *((uint32_t *)CHZ_NS_IDLE_BASE);
 }
 
 uint32_t tfm_hal_get_ns_entry_point(void)
 {
-    return *((uint32_t *)(memory_regions.non_secure_code_start + 4));
+    return *((uint32_t *)(CHZ_NS_IDLE_BASE + 4));
 }

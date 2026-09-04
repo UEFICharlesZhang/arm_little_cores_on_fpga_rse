@@ -358,6 +358,14 @@ const struct sau_cfg_t sau_cfg[] = {
         CHZ_VENEER_NSC_LIMIT,
         true,
     },
+    /* NS idle stub (fake NS vector table + wfi loop + stack) for the SPM's
+     * NS launch — no real NS firmware exists on this SoC. See
+     * tfm_hal_platform.c for the rationale. */
+    {
+        0x00018000u,
+        0x0001BFFFu,
+        false,
+    },
     {
         PERIPHERALS_BASE_NS_START,
 #if (defined(SECURE_UART1) && defined(PSA_FF_TEST_SECURE_UART2))
