@@ -2,10 +2,32 @@
  * CHZ Arm Little Cores SoC - SPI NOR flash driver (AXI Quad SPI)
  *
  * Replaces the an521 SRAM-emulated flash driver with a real driver for a SPI
- * NOR flash behind a Xilinx AXI Quad SPI controller (PG153).
+ * NOR flash behind a Xilinx AXI Quad SPI controller.
  *
- * Read:  memory-mapped XIP window (FLASH0_BASE_S = 0x1000_0000).
- * Erase/Program: AXI Quad SPI legacy register interface (SPI NOR commands).
+ * The XIP memory window (FLASH0_BASE_S = 0x1000_0000) was removed from the
+ * hardware (2026-09-03): C_XIP_MODE=0, standard mode only.  All reads go
+ * over the register interface with the 0x03 read command; erase/program
+ * use the standard SPI NOR commands.
+ *
+ * Register map (v3.2, decoded from axi_quad_spi_v3_2_rfs.vhd — the old
+ * PG153/DS558 bit assumptions were wrong for this IP version):
+ *   SPICR 0x60 (rst 0x180): bit1 SPE, bit2 MASTER, bit5/6 TX/RX FIFO rst
+ *       (self-clearing), bit7 Manual_SS, bit8 TR_INHIBIT
+ *   SPISR 0x64 (rst 0xA5):  bit0 RX_EMPTY, bit2 TX_EMPTY
+ *   SPISSR 0x70: bit0 = CS (active low, manual mode)
+ *
+ * Transfer model (verified on hardware via software/spi_test and
+ * software/flash_prog):
+ *   - CS asserted/deasserted by SPISSR (manual mode) around a transaction
+ *   - every TX byte is followed by a ~25 us pause, then its RX echo is
+ *     read.  Two quirks forced this: (a) a DTR write landing while a
+ *     transfer is in flight is silently dropped, and (b) a tight per-byte
+ *     interleave (write, poll echo immediately, ~1-2 us/byte) misaligns
+ *     the RX echo by one byte on some code layouts (JEDEC comes back
+ *     00 00 EF 40 instead of 00 EF 40 16); >= 25 us between bytes is
+ *     reliably aligned.  The pause also keeps the 16-deep RX FIFO from
+ *     filling up mid-transfer (a full RX FIFO wedges the IP: SCK never
+ *     resumes).
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
@@ -21,35 +43,34 @@
 #endif
 
 /* Driver version */
-#define ARM_FLASH_DRV_VERSION      ARM_DRIVER_VERSION_MAJOR_MINOR(1, 1)
+#define ARM_FLASH_DRV_VERSION      ARM_DRIVER_VERSION_MAJOR_MINOR(1, 2)
 #define ARM_FLASH_DRV_ERASE_VALUE  0xFF
 
 /* ------------------------------------------------------------------ */
-/* AXI Quad SPI (Xilinx PG153) register map                           */
+/* AXI Quad SPI (Xilinx PG153 / v3.2 RFS) register map                 */
 /* ------------------------------------------------------------------ */
 #define AXI_QSPI_BASE          0x40060000UL
 
-#define AXI_QSPI_SRR           (AXI_QSPI_BASE + 0x40)  /* Software Reset       */
-#define AXI_QSPI_SPICR         (AXI_QSPI_BASE + 0x60)  /* SPI Control          */
-#define AXI_QSPI_SPISR         (AXI_QSPI_BASE + 0x64)  /* SPI Status           */
-#define AXI_QSPI_SPI_DTR       (AXI_QSPI_BASE + 0x68)  /* Data Transmit (FIFO) */
-#define AXI_QSPI_SPI_DRR       (AXI_QSPI_BASE + 0x6C)  /* Data Receive  (FIFO) */
-#define AXI_QSPI_SPISSR        (AXI_QSPI_BASE + 0x70)  /* Slave Select         */
-#define AXI_QSPI_TX_FIFO_OCY   (AXI_QSPI_BASE + 0x74)  /* TX FIFO Occupancy    */
-#define AXI_QSPI_RX_FIFO_OCY   (AXI_QSPI_BASE + 0x78)  /* RX FIFO Occupancy    */
+#define AXI_QSPI_SRR           (AXI_QSPI_BASE + 0x40)  /* Software Reset    */
+#define AXI_QSPI_SPICR         (AXI_QSPI_BASE + 0x60)  /* SPI Control       */
+#define AXI_QSPI_SPISR         (AXI_QSPI_BASE + 0x64)  /* SPI Status        */
+#define AXI_QSPI_SPI_DTR       (AXI_QSPI_BASE + 0x68)  /* Data Transmit FIFO*/
+#define AXI_QSPI_SPI_DRR       (AXI_QSPI_BASE + 0x6C)  /* Data Receive FIFO */
+#define AXI_QSPI_SPISSR        (AXI_QSPI_BASE + 0x70)  /* Slave Select      */
 
-/* SPICR bit fields (PG153, [TODO: 核对] 具体位定义) */
-#define SPICR_SPE            (1u << 0)   /* SPI Enable                    */
-#define SPICR_MASTER         (1u << 1)   /* Master mode                   */
-#define SPICR_CPOL           (1u << 2)
-#define SPICR_CPHA           (1u << 3)
-#define SPICR_TX_FIFO_RST    (1u << 4)
-#define SPICR_RX_FIFO_RST    (1u << 5)
-#define SPICR_MTI            (1u << 6)   /* Master Transaction Inhibit   */
-/* [TODO: 核对] XIP 模式位 (PG153); 若 IP 支持 XIP 与 legacy 并存则无需切换 */
-#define SPICR_XIP_MODE       (1u << 23)
+/* SPICR (v3.2): bit0 LOOP, bit1 SPE, bit2 MASTER, bit3 CPOL, bit4 CPHA,
+ * bit5 TX_FIFO_RST / bit6 RX_FIFO_RST (self-clearing), bit7 Manual_SS,
+ * bit8 TR_INHIBIT (MTI), bit9 LSB-first */
+#define SPICR_SPE            (1u << 1)
+#define SPICR_MASTER         (1u << 2)
+#define SPICR_CPOL           (1u << 3)
+#define SPICR_CPHA           (1u << 4)
+#define SPICR_TX_FIFO_RST    (1u << 5)
+#define SPICR_RX_FIFO_RST    (1u << 6)
+#define SPICR_MANUAL_SS      (1u << 7)
+#define SPICR_TR_INHIBIT     (1u << 8)
 
-/* SPISR bit fields (PG153, [TODO: 核对]) */
+/* SPISR (v3.2): bit0 RX_EMPTY, bit1 RX_FULL, bit2 TX_EMPTY, bit3 TX_FULL */
 #define SPISR_RX_EMPTY       (1u << 0)
 #define SPISR_RX_FULL        (1u << 1)
 #define SPISR_TX_EMPTY       (1u << 2)
@@ -57,6 +78,11 @@
 
 /* SRR software reset value */
 #define SRR_SW_RESET         0x0AU
+
+/* Busy-wait bounds (loops of an MMIO read + branch).  RX echo of one
+ * byte at 12.5 MHz SCK takes ~640 ns; these bounds are generous. */
+#define QSPI_XFER_TIMEOUT    40000u
+#define QSPI_IDLE_TIMEOUT    100000u
 
 /* ------------------------------------------------------------------ */
 /* SPI NOR flash commands (Winbond/ISSI/Micron compatible)            */
@@ -67,6 +93,7 @@
 #define CMD_PAGE_PROGRAM     0x02U
 #define CMD_READ             0x03U
 #define CMD_SECTOR_ERASE     0x20U  /* 4 KB sector */
+#define CMD_BLOCK_ERASE      0xD8U  /* 64 KB block */
 #define CMD_CHIP_ERASE       0xC7U
 
 #define FLASH_WIP_MASK       0x01U  /* Write In Progress, RDSR1 bit 0 */
@@ -74,75 +101,122 @@
 /* ------------------------------------------------------------------ */
 /* Low-level AXI Quad SPI accessors                                    */
 /* ------------------------------------------------------------------ */
-static volatile uint32_t *qspi_reg(uint32_t addr)
+static void qspi_delay(uint32_t n)
 {
-    return (volatile uint32_t *)addr;
+    volatile uint32_t i;
+    for (i = 0; i < n; i++) {
+    }
 }
 
 static void qspi_wr(uint32_t addr, uint32_t val)
 {
-    *qspi_reg(addr) = val;
+    *(volatile uint32_t *)addr = val;
 }
 
 static uint32_t qspi_rd(uint32_t addr)
 {
-    return *qspi_reg(addr);
+    return *(volatile uint32_t *)addr;
 }
 
-static void qspi_tx_byte(uint8_t b)
+/*
+ * One SPI transaction: CS low, n bytes out, n bytes in (full duplex),
+ * CS high.  Every TX byte is followed by a ~25 us pause before its RX
+ * echo is collected (see header comment for the two quirks this paces
+ * around).  Returns 0 on success, -1 on timeout.
+ */
+static int32_t qspi_xfer(const uint8_t *tx, uint8_t *rx, uint32_t n)
 {
-    qspi_wr(AXI_QSPI_SPI_DTR, b);
-    while (!(qspi_rd(AXI_QSPI_SPISR) & SPISR_TX_EMPTY)) {
+    uint32_t i;
+
+    qspi_wr(AXI_QSPI_SPISSR, 0x0);       /* assert CS */
+    qspi_delay(5000);
+    for (i = 0; i < n; i++) {
+        uint32_t t = 0;
+        qspi_wr(AXI_QSPI_SPI_DTR, tx[i]);
+        qspi_delay(5000);                /* ~25 us: see header comment */
+        do {
+        } while ((qspi_rd(AXI_QSPI_SPISR) & SPISR_RX_EMPTY) &&
+                 ++t < QSPI_XFER_TIMEOUT);
+        if (t >= QSPI_XFER_TIMEOUT) {
+            qspi_wr(AXI_QSPI_SPISSR, 0x1);
+            return -1;
+        }
+        if (rx != NULL) {
+            rx[i] = (uint8_t)qspi_rd(AXI_QSPI_SPI_DRR);
+        } else {
+            (void)qspi_rd(AXI_QSPI_SPI_DRR);
+        }
     }
+    qspi_wr(AXI_QSPI_SPISSR, 0x1);       /* deassert CS */
+    qspi_delay(500);
+    return 0;
 }
 
-static uint8_t qspi_xfer_byte(uint8_t b)
+/* Read len bytes from flash offset addr (0x03 command, no dummy bytes). */
+static int32_t flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
 {
-    qspi_tx_byte(b);
-    while (qspi_rd(AXI_QSPI_SPISR) & SPISR_RX_EMPTY) {
+    uint8_t tx[4 + 256];
+    uint8_t rx[4 + 256];
+    uint32_t chunk;
+
+    while (len > 0) {
+        chunk = (len > 256) ? 256 : len;
+        tx[0] = CMD_READ;
+        tx[1] = (uint8_t)(addr >> 16);
+        tx[2] = (uint8_t)(addr >> 8);
+        tx[3] = (uint8_t)addr;
+        memset(&tx[4], 0x00, chunk);     /* dummy clocks for the data */
+        if (qspi_xfer(tx, rx, 4 + chunk) != 0) {
+            return -1;
+        }
+        memcpy(buf, &rx[4], chunk);
+        addr += chunk;
+        buf += chunk;
+        len -= chunk;
     }
-    return (uint8_t)qspi_rd(AXI_QSPI_SPI_DRR);
-}
-
-static void qspi_send(const uint8_t *buf, uint32_t len)
-{
-    while (len--) {
-        qspi_tx_byte(*buf++);
-    }
-}
-
-static void qspi_xip_enable(void)
-{
-    qspi_wr(AXI_QSPI_SPICR, qspi_rd(AXI_QSPI_SPICR) | SPICR_XIP_MODE);
-}
-
-static void qspi_xip_disable(void)
-{
-    qspi_wr(AXI_QSPI_SPICR, qspi_rd(AXI_QSPI_SPICR) & ~SPICR_XIP_MODE);
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* SPI NOR flash operations                                            */
 /* ------------------------------------------------------------------ */
-static void flash_write_enable(void)
+static int32_t flash_write_enable(void)
 {
     uint8_t cmd = CMD_WREN;
-    qspi_send(&cmd, 1);
+
+    return qspi_xfer(&cmd, NULL, 1);
 }
 
-static uint8_t flash_read_status(void)
+static int32_t flash_read_status(uint8_t *sr)
 {
-    qspi_xfer_byte(CMD_RDSR1);
-    return qspi_xfer_byte(0x00);
-}
+    uint8_t tx[2] = { CMD_RDSR1, 0x00 };
+    uint8_t rx[2];
 
-static void flash_wait_wip_clear(void)
-{
-    while (flash_read_status() & FLASH_WIP_MASK) {
+    if (qspi_xfer(tx, rx, 2) != 0) {
+        return -1;
     }
+    *sr = rx[1];                         /* 1st byte after the command */
+    return 0;
 }
 
-static void flash_sector_erase(uint32_t addr)
+static int32_t flash_wait_wip_clear(void)
+{
+    uint32_t t;
+    uint8_t sr;
+
+    for (t = 0; t < QSPI_IDLE_TIMEOUT; t++) {
+        if (flash_read_status(&sr) != 0) {
+            return -1;
+        }
+        if (!(sr & FLASH_WIP_MASK)) {
+            return 0;
+        }
+        qspi_delay(10000);               /* ~50 us */
+    }
+    return -1;
+}
+
+static int32_t flash_sector_erase(uint32_t addr)
 {
     uint8_t cmd[4] = {
         CMD_SECTOR_ERASE,
@@ -151,28 +225,55 @@ static void flash_sector_erase(uint32_t addr)
         (uint8_t)(addr),
     };
 
-    qspi_xip_disable();
-    flash_write_enable();
-    qspi_send(cmd, sizeof(cmd));
-    flash_wait_wip_clear();
-    qspi_xip_enable();
+    if (flash_write_enable() != 0) {
+        return -1;
+    }
+    if (qspi_xfer(cmd, NULL, sizeof(cmd)) != 0) {
+        return -1;
+    }
+    return flash_wait_wip_clear();
 }
 
-static void flash_page_program(uint32_t addr, const uint8_t *data, uint32_t len)
+static int32_t flash_chip_erase(void)
 {
-    uint8_t cmd[4] = {
-        CMD_PAGE_PROGRAM,
-        (uint8_t)(addr >> 16),
-        (uint8_t)(addr >> 8),
-        (uint8_t)(addr),
-    };
+    uint8_t cmd = CMD_CHIP_ERASE;
 
-    qspi_xip_disable();
-    flash_write_enable();
-    qspi_send(cmd, sizeof(cmd));
-    qspi_send(data, len);
-    flash_wait_wip_clear();
-    qspi_xip_enable();
+    if (flash_write_enable() != 0) {
+        return -1;
+    }
+    if (qspi_xfer(&cmd, NULL, 1) != 0) {
+        return -1;
+    }
+    return flash_wait_wip_clear();
+}
+
+static int32_t flash_page_program(uint32_t addr, const uint8_t *data,
+                                  uint32_t len)
+{
+    uint8_t cmd[4 + 256];
+    uint32_t chunk;
+
+    while (len > 0) {
+        chunk = (len > 256) ? 256 : len;
+        cmd[0] = CMD_PAGE_PROGRAM;
+        cmd[1] = (uint8_t)(addr >> 16);
+        cmd[2] = (uint8_t)(addr >> 8);
+        cmd[3] = (uint8_t)addr;
+        memcpy(&cmd[4], data, chunk);
+        if (flash_write_enable() != 0) {
+            return -1;
+        }
+        if (qspi_xfer(cmd, NULL, 4 + chunk) != 0) {
+            return -1;
+        }
+        if (flash_wait_wip_clear() != 0) {
+            return -1;
+        }
+        addr += chunk;
+        data += chunk;
+        len -= chunk;
+    }
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -278,13 +379,14 @@ static int32_t ARM_Flash_Initialize(ARM_Flash_SignalEvent_t cb_event)
         return ARM_DRIVER_ERROR;
     }
 
-    /* Software reset the AXI Quad SPI core */
+    /* Software reset the AXI Quad SPI core, then enable standard-mode
+     * master with manual CS (SPE|MASTER|ManualSS, MTI=0). */
     qspi_wr(AXI_QSPI_SRR, SRR_SW_RESET);
-
-    /* Enable SPI in master mode; deassert all slave selects */
+    qspi_delay(1000);
     qspi_wr(AXI_QSPI_SPICR,
-            SPICR_SPE | SPICR_MASTER | SPICR_TX_FIFO_RST | SPICR_RX_FIFO_RST);
-    qspi_wr(AXI_QSPI_SPISSR, 0xFFFFFFFFU);
+            SPICR_SPE | SPICR_MASTER | SPICR_MANUAL_SS);
+    qspi_wr(AXI_QSPI_SPISSR, 0x1);       /* CS deasserted */
+    qspi_delay(1000);
 
     return ARM_DRIVER_OK;
 }
@@ -308,8 +410,7 @@ static int32_t ARM_Flash_PowerControl(ARM_POWER_STATE state)
 
 static int32_t ARM_Flash_ReadData(uint32_t addr, void *data, uint32_t cnt)
 {
-    uint32_t start_addr = FLASH0_DEV->memory_base + addr;
-    int32_t rc = 0;
+    int32_t rc;
 
     if (addr % data_width_byte[DriverCapabilities.data_width] != 0) {
         return ARM_DRIVER_ERROR_PARAMETER;
@@ -322,8 +423,9 @@ static int32_t ARM_Flash_ReadData(uint32_t addr, void *data, uint32_t cnt)
         return ARM_DRIVER_ERROR_PARAMETER;
     }
 
-    /* XIP: read directly from the memory-mapped SPI flash window */
-    memcpy(data, (void *)start_addr, cnt);
+    if (flash_read(addr, (uint8_t *)data, cnt) != 0) {
+        return ARM_DRIVER_ERROR;
+    }
 
     cnt /= data_width_byte[DriverCapabilities.data_width];
 
@@ -333,7 +435,7 @@ static int32_t ARM_Flash_ReadData(uint32_t addr, void *data, uint32_t cnt)
 static int32_t ARM_Flash_ProgramData(uint32_t addr, const void *data,
                                      uint32_t cnt)
 {
-    int32_t rc = 0;
+    int32_t rc;
 
     cnt *= data_width_byte[DriverCapabilities.data_width];
 
@@ -344,7 +446,9 @@ static int32_t ARM_Flash_ProgramData(uint32_t addr, const void *data,
         return ARM_DRIVER_ERROR_PARAMETER;
     }
 
-    flash_page_program(addr, (const uint8_t *)data, cnt);
+    if (flash_page_program(addr, (const uint8_t *)data, cnt) != 0) {
+        return ARM_DRIVER_ERROR;
+    }
 
     cnt /= data_width_byte[DriverCapabilities.data_width];
 
@@ -353,7 +457,7 @@ static int32_t ARM_Flash_ProgramData(uint32_t addr, const void *data,
 
 static int32_t ARM_Flash_EraseSector(uint32_t addr)
 {
-    int32_t rc = 0;
+    int32_t rc;
 
     rc  = is_range_valid(FLASH0_DEV, addr);
     rc |= is_sector_aligned(FLASH0_DEV, addr);
@@ -361,24 +465,22 @@ static int32_t ARM_Flash_EraseSector(uint32_t addr)
         return ARM_DRIVER_ERROR_PARAMETER;
     }
 
-    flash_sector_erase(addr);
+    if (flash_sector_erase(addr) != 0) {
+        return ARM_DRIVER_ERROR;
+    }
 
     return ARM_DRIVER_OK;
 }
 
 static int32_t ARM_Flash_EraseChip(void)
 {
-    uint8_t cmd = CMD_CHIP_ERASE;
-
     if (DriverCapabilities.erase_chip != 1) {
         return ARM_DRIVER_ERROR_UNSUPPORTED;
     }
 
-    qspi_xip_disable();
-    flash_write_enable();
-    qspi_send(&cmd, 1);
-    flash_wait_wip_clear();
-    qspi_xip_enable();
+    if (flash_chip_erase() != 0) {
+        return ARM_DRIVER_ERROR;
+    }
 
     return ARM_DRIVER_OK;
 }
