@@ -269,6 +269,11 @@ enum tfm_plat_err_t nvic_interrupt_target_state_cfg(void)
 /*----------------- NVIC interrupt enabling for S peripherals ----------------*/
 enum tfm_plat_err_t nvic_interrupt_enable(void)
 {
+    /* No MPC/PPC hardware on this SoC: their IRQ enable paths would
+     * touch the non-existent 0x50083000/0x50080000 register blocks and
+     * HardFault (traced: platform_init -> nvic_interrupt_enable ->
+     * SRAM1_MPC_EnableInterrupt).  Nothing to enable here. */
+#if 0
     int32_t ret = ARM_DRIVER_OK;
 
     /* MPC interrupt enabling */
@@ -281,9 +286,10 @@ enum tfm_plat_err_t nvic_interrupt_enable(void)
         return TFM_PLAT_ERR_SYSTEM_ERR;
     }
     NVIC_EnableIRQ(MPC_IRQn);
+#endif
 
-    /* (No SPCTRL on this SoC — the SSE200 PPC interrupt config is
-     * omitted.) */
+    return TFM_PLAT_ERR_SUCCESS;
+
 #if 0
     /* PPC interrupt enabling */
     /* Clear pending PPC interrupts */

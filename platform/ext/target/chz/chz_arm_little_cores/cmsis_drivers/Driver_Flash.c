@@ -152,11 +152,18 @@ static int32_t qspi_xfer(const uint8_t *tx, uint8_t *rx, uint32_t n)
     return 0;
 }
 
-/* Read len bytes from flash offset addr (0x03 command, no dummy bytes). */
+/* Read len bytes from flash offset addr (0x03 command, no dummy bytes).
+ * NOTE: the 260 B xfer buffers are static — the S image MSP stack is
+ * only 2 KB and an on-stack copy overflowed it during ITS init
+ * (observed: SP fell into the 0xDEC0DE fill, MMFSR IACCVIOL).  The
+ * driver is single-instance/non-reentrant, so statics are safe. */
+static uint8_t flash_rw_tx[4 + 256];
+static uint8_t flash_rw_rx[4 + 256];
+
 static int32_t flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
 {
-    uint8_t tx[4 + 256];
-    uint8_t rx[4 + 256];
+    uint8_t *tx = flash_rw_tx;
+    uint8_t *rx = flash_rw_rx;
     uint32_t chunk;
 
     while (len > 0) {
@@ -250,7 +257,7 @@ static int32_t flash_chip_erase(void)
 static int32_t flash_page_program(uint32_t addr, const uint8_t *data,
                                   uint32_t len)
 {
-    uint8_t cmd[4 + 256];
+    static uint8_t cmd[4 + 256];
     uint32_t chunk;
 
     while (len > 0) {

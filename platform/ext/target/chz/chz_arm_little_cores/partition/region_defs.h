@@ -29,7 +29,7 @@
 #ifdef TFM_FIH_PROFILE_ON
 #define S_MSP_STACK_SIZE        (0x00000A40)
 #else
-#define S_MSP_STACK_SIZE        (0x00000800)
+#define S_MSP_STACK_SIZE        (0x00001000)
 #endif
 #define S_PSP_STACK_SIZE        (0x00000800)
 
