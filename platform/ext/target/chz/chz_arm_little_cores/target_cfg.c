@@ -332,6 +332,15 @@ struct sau_cfg_t {
     bool nsc;
 };
 
+/* The CMSE veneers (__acle_se_*, 0x12308-0x123A0) are compiled into the
+ * main code region, NOT into .gnu.sgstubs (which holds one stub at
+ * 0x10640): the SAU NSC region must cover their real addresses or the
+ * first veneer call SecureFaults (SG executed outside NSC).  The
+ * addresses below track the linker output (see tfm_s.map); re-check
+ * them if the image layout changes. */
+#define CHZ_VENEER_NSC_BASE  (0x00012300u)
+#define CHZ_VENEER_NSC_LIMIT (0x000123BFu)
+
 const struct sau_cfg_t sau_cfg[] = {
     {
         ((uint32_t)&REGION_NAME(Load$$LR$$, LR_NS_PARTITION, $$Base)),
@@ -345,8 +354,8 @@ const struct sau_cfg_t sau_cfg[] = {
         false,
     },
     {
-        (uint32_t)&REGION_NAME(Image$$, ER_VENEER, $$Base),
-        (uint32_t)&REGION_NAME(Image$$, VENEER_ALIGN, $$Limit) - 1,
+        CHZ_VENEER_NSC_BASE,
+        CHZ_VENEER_NSC_LIMIT,
         true,
     },
     {
