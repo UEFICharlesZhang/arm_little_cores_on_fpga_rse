@@ -136,9 +136,14 @@
                                   FLASH_NS_PARTITION_SIZE)
 
 #ifdef BL2
-/* Bootloader regions */
-#define BL2_CODE_START    (0x10000000)   /* XIP from SPI NOR flash */
-#define BL2_CODE_SIZE     (0x00010000)   /* 64 KB */
+/* Bootloader regions — RAM-load image (no XIP on this SoC):
+ * romcode copies the BL2 image from flash into ITCM at BL2_CODE_START
+ * (0x2000: clear of romcode at 0x0 and of the tfm_s target 0x10400;
+ * BL2 image ~28 KB fits well below 0x10400) and jumps.  .data/.bss live
+ * in DTCM; the linker's copy table handles the data init.
+ */
+#define BL2_CODE_START    (0x00002000)
+#define BL2_CODE_SIZE     (0x00008000)   /* 32 KB */
 #define BL2_CODE_LIMIT    (BL2_CODE_START + BL2_CODE_SIZE - 1)
 
 #define BL2_DATA_START    (0x20000000)   /* DTCM */
