@@ -10,6 +10,7 @@
 #include "tfm_hal_platform.h"
 #include "tfm_plat_defs.h"
 #include "uart_stdout.h"
+#include "chz_multicore_boot.h"
 
 extern const struct memory_region_limits memory_regions;
 
@@ -95,6 +96,11 @@ FIH_RET_TYPE(enum tfm_hal_status_t) tfm_hal_platform_init(void)
          * misaligned byte-lane path on this SoC's custom AHB/TCM wiring. */
         *(volatile uint32_t *)CHZ_NS_IDLE_CODE = 0xE7FDBF30u;
     }
+
+    /* RSE duty on this SoC: distribute core1-4 firmware from flash through
+     * their TCM windows and release CPUWAIT (chz_multicore_boot.c). Called
+     * last so the console (stdio) is up and all platform state is set. */
+    chz_multicore_boot();
 
     FIH_RET(TFM_HAL_SUCCESS);
 }

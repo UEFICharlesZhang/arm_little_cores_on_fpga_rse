@@ -152,6 +152,7 @@ target_sources(tfm_spm
         target_cfg.c
         tfm_hal_isolation.c
         tfm_hal_platform.c
+        chz_multicore_boot.c
         faults.c
         $<$<OR:$<BOOL:${CONFIG_TFM_FLIH_API}>,$<BOOL:${CONFIG_TFM_SLIH_API}>>:${CMAKE_CURRENT_SOURCE_DIR}/tfm_interrupts.c>
 )

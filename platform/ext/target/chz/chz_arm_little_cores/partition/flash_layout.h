@@ -230,6 +230,18 @@
 #define S_IMAGE_LOAD_ADDRESS  (0x00010000)
 #define NS_IMAGE_LOAD_ADDRESS (0x00020000)
 
+/* CHZ SoC: core1-4 (SCP/MCP/LCP/AP) firmware slots, distributed at boot by
+ * the RSE (tfm_s, chz_multicore_boot.c) through the TCM slave windows.
+ * Each slot holds the raw firmware binary; a 16-byte little-endian header
+ * {magic 'MCC1'..'MCC4', src_off, dst, len} at 0xE000+(n-1)*0x10 describes
+ * it (same shape as the BL2 header at 0xFFC0).  Headers sit in their OWN
+ * 4 KB sector (0xE000-0xEFFF) so core-fw re-flashing never touches the
+ * romcode image-header sector (0xF000-0xFFFF).  Slots sit above the TF-M areas (~0x7B000), 128 KB each
+ * (= ITCM size). */
+#define FLASH_CORE_FW_HDR_OFFSET(n)   (0xE000 + ((n) - 1) * 0x10)  /* n=1..4 */
+#define FLASH_CORE_FW_SLOT_OFFSET(n)  (0x100000 + ((n) - 1) * 0x20000)
+#define FLASH_CORE_FW_SLOT_SIZE       (0x20000)   /* 128 KB */
+
 /* RW data lives in DTCM */
 #define S_RAM_ALIAS_BASE  (0x20000000)
 #define NS_RAM_ALIAS_BASE (0x20010000)
