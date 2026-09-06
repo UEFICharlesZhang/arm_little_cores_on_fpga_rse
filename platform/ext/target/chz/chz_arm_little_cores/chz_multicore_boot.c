@@ -45,8 +45,12 @@ extern ARM_DRIVER_FLASH Driver_FLASH0;
 /* core n ITCM slave window (hardware/memmap.h) */
 #define CHZ_ITCM_WIN(n)        (0x60000000u + (uint32_t)(n) * 0x80000u)
 
-/* CPUWAIT control (AXI GPIO; bit n-1 = 1 holds core n; reset default 0xF) */
-#define CHZ_CPUWAIT_GPIO       0x40030000u
+/* SYSCTRL 寄存器块 (doc/SYSCTRL.md):
+ *   WAIT  +0x00 [3:0] 1=保持核 n (复位值 0xF; 与旧 GPIO 同址同语义)
+ *   RESET +0x04 [3:0] 1=复位核 n
+ *   KEY   +0x0C 写 0x5A5A55A5 解锁 WAIT/RESET 写 */
+#define CHZ_SYSCTRL_WAIT       0x40030000u
+#define CHZ_SYSCTRL_KEY        0x4003000Cu
 
 /* header magic 'MCC1'..'MCC4', little-endian uint32 (ASCII in flash:
  * bytes 4D 43 43 3n) */
@@ -265,8 +269,11 @@ void chz_multicore_boot(void)
 
     mcb_puts("\r\n[RSE] multicore boot: distributing core1-4 firmware\r\n");
 
+    /* unlock SYSCTRL WAIT/RESET writes (KEY, before touching WAIT) */
+    *(volatile uint32_t *)CHZ_SYSCTRL_KEY = 0x5A5A55A5u;
+
     /* make sure every slave core is held while we write their ITCM */
-    *(volatile uint32_t *)CHZ_CPUWAIT_GPIO = 0xFu;
+    *(volatile uint32_t *)CHZ_SYSCTRL_WAIT = 0xFu;
     mcb_delay_ms(10);
 
     for (n = CHZ_CORE_FW_FIRST; n <= CHZ_CORE_FW_LAST; n++) {
@@ -286,7 +293,7 @@ void chz_multicore_boot(void)
         mcb_puts(": CPUWAIT released (gpio=");
         mcb_puthex32(mask);
         mcb_puts("), banner next\r\n");
-        *(volatile uint32_t *)CHZ_CPUWAIT_GPIO = mask;
+        *(volatile uint32_t *)CHZ_SYSCTRL_WAIT = mask;
         released++;
         mcb_delay_ms(1000);
     }
