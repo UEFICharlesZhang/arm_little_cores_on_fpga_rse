@@ -247,6 +247,6 @@
 #define NS_RAM_ALIAS_BASE (0x20010000)
 
 #define TOTAL_ROM_SIZE FLASH_TOTAL_SIZE
-#define TOTAL_RAM_SIZE (0x10000)     /* 64 KB used (DTCM is 256 KB) */
+#define TOTAL_RAM_SIZE (0x10000)     /* 64 KB used (= full DTCM) */
 
 #endif /* __FLASH_LAYOUT_H__ */
