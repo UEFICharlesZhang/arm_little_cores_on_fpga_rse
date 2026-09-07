@@ -179,13 +179,13 @@ static int mcb_load_core(int n)
     win = (volatile uint32_t *)hdr[2];
 
     if (!mcb_window_ok(win)) {
-        /* Window path unusable (see BRINGUP 2026-09-05): the core's ITCM
-         * holds a self-load ROM from the bitstream — releasing CPUWAIT is
-         * enough, it pulls its own firmware from flash. */
+        /* Window path unusable: keep the core HELD (its ITCM has no
+         * preloaded content — cores 1-4 run only what core0 loads;
+         * the self-load ROM was removed 2026-09-07). */
         mcb_puts("[RSE] core");
         mcb_putdec32((uint32_t)n);
-        mcb_puts(": window broken, releasing for self-load\r\n");
-        return 1;
+        mcb_puts(": window broken, core stays held\r\n");
+        return 0;
     }
 
     mcb_puts("[RSE] core");
@@ -242,8 +242,8 @@ static int mcb_load_core(int n)
             mcb_putdec32((uint32_t)n);
             mcb_puts(": window verify FAIL @");
             mcb_putdec32((uint32_t)i);
-            mcb_puts(" — releasing for self-load\r\n");
-            return 1;
+            mcb_puts(" — core stays held\r\n");
+            return 0;
         }
     }
     mcb_puts("[RSE] core");
