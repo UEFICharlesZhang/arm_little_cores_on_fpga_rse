@@ -45,6 +45,12 @@ extern ARM_DRIVER_FLASH Driver_FLASH0;
 /* core n ITCM slave window (hardware/memmap.h) */
 #define CHZ_ITCM_WIN(n)        (0x60000000u + (uint32_t)(n) * 0x80000u)
 
+/* core n DTCM slave window; 保留字 +0xFFFC = 核 ID 章 — core0 在释放
+ * CPUWAIT 前写入, 从核固件读之而知自己的角色 (SCP chz_core_id.c;
+ * DTCM 对 SCP 单区固件整片空闲) */
+#define CHZ_DTCM_WIN(n)        (0x60280000u + (uint32_t)(n) * 0x80000u)
+#define CHZ_CORE_ID_OFF        0xFFFCu
+
 /* SYSCTRL 寄存器块 (doc/SYSCTRL.md):
  *   WAIT  +0x00 [3:0] 1=保持核 n (复位值 0xF; 与旧 GPIO 同址同语义)
  *   RESET +0x04 [3:0] 1=复位核 n
@@ -243,6 +249,20 @@ static int mcb_load_core(int n)
             mcb_puts(": window verify FAIL @");
             mcb_putdec32((uint32_t)i);
             mcb_puts(" — core stays held\r\n");
+            return 0;
+        }
+    }
+    /* stamp the core ID into the core's DTCM reserved word (window path,
+     * same fabric as the ITCM load): slave firmware identifies its role */
+    {
+        volatile uint32_t *idp =
+            (volatile uint32_t *)(CHZ_DTCM_WIN(n) + CHZ_CORE_ID_OFF);
+        *idp = (uint32_t)n;
+        __asm volatile("dsb" ::: "memory");
+        if (*idp != (uint32_t)n) {
+            mcb_puts("[RSE] core");
+            mcb_putdec32((uint32_t)n);
+            mcb_puts(": core-id stamp FAIL — core stays held\r\n");
             return 0;
         }
     }
